@@ -1,13 +1,12 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 from datetime import datetime
 import io
+from sqlalchemy import create_engine, text
 import os
 
 st.set_page_config(page_title="Gestão Grupo Peres", layout="wide", page_icon="🚜")
 
-# Estilização Moderna e Responsiva
 st.markdown("""
     <style>
         .hero-banner { 
@@ -31,43 +30,82 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-conn = sqlite3.connect('estoque_boa_vista.db', check_same_thread=False)
+# CONEXÃO COM SUPABASE (BANCO NA NUVEM)
+DATABASE_URL = "postgresql://postgres:grupoperes-bv@db.ojmqpgnscakdgvenhvyp.supabase.co:5432/postgres"
+engine = create_engine(DATABASE_URL)
 
 def init_db():
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS estoque (nome TEXT PRIMARY KEY, categoria TEXT, unidade TEXT, quantidade REAL)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS veiculos (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT)''')
-    
-    try:
-        c.execute('''ALTER TABLE veiculos ADD COLUMN detalhes TEXT''')
-    except sqlite3.OperationalError:
-        pass 
+    with engine.connect() as conn:
+        conn.execute(text('''
+            CREATE TABLE IF NOT EXISTS estoque (
+                nome TEXT PRIMARY KEY, 
+                categoria TEXT, 
+                unidade TEXT, 
+                quantidade REAL
+            )
+        '''))
+        conn.execute(text('''
+            CREATE TABLE IF NOT EXISTS veiculos (
+                id SERIAL PRIMARY KEY, 
+                nome TEXT, 
+                detalhes TEXT
+            )
+        '''))
+        conn.execute(text('''
+            CREATE TABLE IF NOT EXISTS usuarios (
+                usuario TEXT PRIMARY KEY, 
+                senha TEXT, 
+                nivel TEXT
+            )
+        '''))
+        conn.execute(text('''
+            CREATE TABLE IF NOT EXISTS movimentacoes (
+                id SERIAL PRIMARY KEY, 
+                item TEXT, 
+                setor TEXT, 
+                veiculo TEXT, 
+                qtd REAL, 
+                tipo TEXT, 
+                data TEXT, 
+                detalhes_aplicacao TEXT
+            )
+        '''))
+        conn.execute(text('''
+            CREATE TABLE IF NOT EXISTS categorias (
+                nome TEXT PRIMARY KEY
+            )
+        '''))
         
-    c.execute('''CREATE TABLE IF NOT EXISTS usuarios (usuario TEXT PRIMARY KEY, senha TEXT, nivel TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS movimentacoes (id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT, setor TEXT, veiculo TEXT, qtd REAL, tipo TEXT, data TEXT, detalhes_aplicacao TEXT)''')
-    
-    # TABELA PARA CATEGORIAS DINÂMICAS
-    c.execute('''CREATE TABLE IF NOT EXISTS categorias (nome TEXT PRIMARY KEY)''')
-    c.execute("SELECT COUNT(*) FROM categorias")
-    if c.fetchone()[0] == 0:
-        categorias_padrao = [('Almoxarifado',), ('Defensivos',), ('Lubrificantes',), ('Combustível',)]
-        c.executemany("INSERT INTO categorias (nome) VALUES (?)", categorias_padrao)
-
-    # REMOVER APENAS O USUÁRIO 'admin' SE EXISTIR
-    c.execute("DELETE FROM usuarios WHERE usuario = 'admin'")
-    
-    # INSERIR USUÁRIO PRINCIPAL APENAS SE NÃO EXISTIR
-    c.execute("SELECT COUNT(*) FROM usuarios WHERE usuario = 'grupoperes-bv'")
-    if c.fetchone()[0] == 0:
-        c.execute("INSERT INTO usuarios VALUES ('grupoperes-bv', '55911466', 'Admin')")
-    
-    conn.commit()
+        result = conn.execute(text("SELECT COUNT(*) FROM categorias"))
+        if result.fetchone()[0] == 0:
+            categorias_padrao = ['Almoxarifado', 'Defensivos', 'Lubrificantes', 'Combustível']
+            for cat in categorias_padrao:
+                conn.execute(text("INSERT INTO categorias (nome) VALUES (:nome)"), {"nome": cat})
+        
+        conn.execute(text("DELETE FROM usuarios WHERE usuario = 'admin'"))
+        result = conn.execute(text("SELECT COUNT(*) FROM usuarios WHERE usuario = 'grupoperes-bv'"))
+        if result.fetchone()[0] == 0:
+            conn.execute(text("INSERT INTO usuarios VALUES ('grupoperes-bv', '55911466', 'Admin')"))
+        
+        conn.commit()
 
 init_db()
 
-# =====================================================================
-# ÁREA DE LOGIN (PROTEÇÃO DO SISTEMA)
-# =====================================================================
+def get_categorias():
+    with engine.connect() as conn:
+        result = conn.execute(text("SELECT nome FROM categorias ORDER BY nome"))
+        categorias = [row[0] for row in result]
+        return categorias if categorias else ["Geral"]
+
+def gerar_relatorio_marcado(df, titulo):
+    cabecalho = "GRUPO PERES - GESTAO DE ESTOQUE\n"
+    cabecalho += "FAZENDA BOA VISTA\n"
+    cabecalho += f"Relatorio: {titulo}\n"
+    cabecalho += f"Data de Emissao: {datetime.now().strftime('%d/%m/%Y as %H:%M')}\n"
+    cabecalho += "-" * 50 + "\n\n"
+    csv_data = df.to_csv(index=False, sep=';')
+    return (cabecalho + csv_data).encode('utf-8-sig')
+
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
     st.session_state['usuario_logado'] = ""
@@ -81,48 +119,29 @@ if not st.session_state['logged_in']:
             user_input = st.text_input("Usuário")
             pass_input = st.text_input("Senha", type="password")
             if st.form_submit_button("Entrar"):
-                c = conn.cursor()
-                c.execute("SELECT * FROM usuarios WHERE usuario = ? AND senha = ?", (user_input, pass_input))
-                usuario_encontrado = c.fetchone()
-                if usuario_encontrado:
-                    st.session_state['logged_in'] = True
-                    st.session_state['usuario_logado'] = user_input
-                    st.session_state['nivel_usuario'] = usuario_encontrado[2]
-                    st.rerun()
-                else:
-                    st.error("Usuário ou senha inválidos.")
+                with engine.connect() as conn:
+                    result = conn.execute(text("SELECT * FROM usuarios WHERE usuario = :u AND senha = :s"), 
+                                        {"u": user_input, "s": pass_input})
+                    usuario_encontrado = result.fetchone()
+                    if usuario_encontrado:
+                        st.session_state['logged_in'] = True
+                        st.session_state['usuario_logado'] = user_input
+                        st.session_state['nivel_usuario'] = usuario_encontrado[2]
+                        st.rerun()
+                    else:
+                        st.error("Usuário ou senha inválidos.")
     st.stop()
 
-# Botão de Sair
 if st.sidebar.button("🚪 Sair do Sistema"):
     st.session_state['logged_in'] = False
     st.session_state['usuario_logado'] = ""
     st.session_state['nivel_usuario'] = ""
     st.rerun()
 
-# Mostrar usuário logado na barra lateral
 st.sidebar.markdown(f"### 👤 Usuário: {st.session_state['usuario_logado']}")
 st.sidebar.markdown(f"### 📊 Nível: {st.session_state['nivel_usuario']}")
 st.sidebar.markdown("---")
 
-# =====================================================================
-# RESTANTE DO SISTEMA
-# =====================================================================
-
-def get_categorias():
-    df = pd.read_sql("SELECT nome FROM categorias ORDER BY nome", conn)
-    return df['nome'].tolist() if not df.empty else ["Geral"]
-
-def gerar_relatorio_marcado(df, titulo):
-    cabecalho = "GRUPO PERES - GESTAO DE ESTOQUE\n"
-    cabecalho += "FAZENDA BOA VISTA\n"
-    cabecalho += f"Relatorio: {titulo}\n"
-    cabecalho += f"Data de Emissao: {datetime.now().strftime('%d/%m/%Y as %H:%M')}\n"
-    cabecalho += "-" * 50 + "\n\n"
-    csv_data = df.to_csv(index=False, sep=';')
-    return (cabecalho + csv_data).encode('utf-8-sig')
-
-# --- CABEÇALHO UNIFICADO ---
 col_logo_esq, col_titulo, col_logo_dir = st.columns([1, 5, 1])
 with col_logo_esq:
     st.markdown('<div class="logo-box"><img src="https://img.icons8.com/color/128/tractor.png" width="110"></div>', unsafe_allow_html=True)
@@ -132,7 +151,6 @@ with col_logo_dir:
     st.markdown('<div class="logo-box"><img src="https://img.icons8.com/color/128/tractor.png" width="110" style="transform: scaleX(-1);"></div>', unsafe_allow_html=True)
 st.markdown("<br>", unsafe_allow_html=True)
 
-# --- MENU DE NAVEGAÇÃO PRINCIPAL ---
 if st.session_state['nivel_usuario'] == 'Admin':
     menu = st.selectbox("📂 SELECIONE O MÓDULO DO SISTEMA QUE DESEJA ACESSAR:", [
         "Início", 
@@ -147,17 +165,16 @@ else:
     ])
 
 st.markdown("---")
-
 lista_categorias_dinamica = get_categorias()
 
-# --- ABA INÍCIO ---
 if menu == "Início":
-    df_estoque_dash = pd.read_sql("SELECT nome, categoria, quantidade, unidade FROM estoque", conn)
-    df_movs_dash = pd.read_sql("SELECT data, tipo, item, qtd, setor FROM movimentacoes ORDER BY id DESC LIMIT 100", conn)
-    df_veic_dash = pd.read_sql("SELECT nome, detalhes FROM veiculos", conn)
+    with engine.connect() as conn:
+        df_estoque_dash = pd.read_sql("SELECT nome, categoria, quantidade, unidade FROM estoque", conn)
+        df_movs_dash = pd.read_sql("SELECT data, tipo, item, qtd, setor FROM movimentacoes ORDER BY id DESC LIMIT 100", conn)
+        df_veic_dash = pd.read_sql("SELECT nome, detalhes FROM veiculos", conn)
     
     total_itens = len(df_estoque_dash)
-    total_movs_query = pd.read_sql("SELECT COUNT(*) as total FROM movimentacoes", conn)
+    total_movs_query = pd.read_sql("SELECT COUNT(*) as total FROM movimentacoes", engine)
     total_movs = total_movs_query['total'][0] if not total_movs_query.empty else 0
     total_veic = len(df_veic_dash)
 
@@ -175,7 +192,6 @@ if menu == "Início":
         with st.expander("👁️ Clique para ver a frota detalhada"):
             if not df_veic_dash.empty: st.dataframe(df_veic_dash, use_container_width=True)
 
-# --- MOVIMENTAÇÃO ---
 elif menu == "Movimentação":
     st.header("🔄 Movimentação de Estoque")
     
@@ -194,7 +210,7 @@ elif menu == "Movimentação":
             tipo = "SAÍDA"
             st.markdown("**2. Tipo de Operação: SAÍDA**")
 
-    itens_df = pd.read_sql("SELECT nome FROM estoque WHERE categoria = ? AND nome != ''", conn, params=(setor,))
+    itens_df = pd.read_sql("SELECT nome FROM estoque WHERE categoria = %s AND nome != ''", engine, params=(setor,))
     
     if not itens_df.empty:
         filtro_item = st.text_input("🔍 Pesquisar Item:", placeholder="Digite para filtrar o item desejado...", key="filtro_mov")
@@ -233,9 +249,9 @@ elif menu == "Movimentação":
                 if tipo == "SAÍDA":
                     st.markdown("---")
                     st.markdown("### 🚜 Direcionamento da Saída")
-                    veic_df = pd.read_sql("SELECT nome FROM veiculos", conn)
+                    veic_df = pd.read_sql("SELECT nome FROM veiculos", engine)
                     if veic_df.empty:
-                        st.error("Nenhuma máquina cadastrada! Cadastre primeiro em Configurações > Gerenciar Máquinas.")
+                        st.error("Nenhuma máquina cadastrada!")
                         veic = "Não informada"
                     else:
                         veic = st.selectbox("Para qual Máquina/Veículo?", veic_df['nome'].tolist())
@@ -248,9 +264,9 @@ elif menu == "Movimentação":
                 if tipo == "SAÍDA":
                     st.markdown("---")
                     st.markdown("### 🚜 Direcionamento da Saída")
-                    veic_df = pd.read_sql("SELECT nome FROM veiculos", conn)
+                    veic_df = pd.read_sql("SELECT nome FROM veiculos", engine)
                     if veic_df.empty:
-                        st.error("Nenhuma máquina cadastrada! Cadastre primeiro em Configurações > Gerenciar Máquinas.")
+                        st.error("Nenhuma máquina cadastrada!")
                         veic = "Não informada"
                     else:
                         veic = st.selectbox("Para qual Máquina/Veículo?", veic_df['nome'].tolist())
@@ -262,28 +278,33 @@ elif menu == "Movimentação":
         
         if st.form_submit_button("Confirmar Operação"):
             if item:
-                cursor = conn.cursor()
-                cursor.execute("SELECT quantidade FROM estoque WHERE nome = ?", (item,))
-                estoque_atual = cursor.fetchone()[0]
-                
-                if tipo == "SAÍDA" and qtd > estoque_atual:
-                    st.error(f"❌ OPERAÇÃO NEGADA: Saldo insuficiente. Estoque atual: {estoque_atual}.")
-                else:
-                    novo_estoque = estoque_atual + qtd if tipo == "ENTRADA" else estoque_atual - qtd
-                    conn.cursor().execute("UPDATE estoque SET quantidade = ? WHERE nome = ?", (novo_estoque, item))
-                    conn.cursor().execute("INSERT INTO movimentacoes (item, setor, veiculo, qtd, tipo, data, detalhes_aplicacao) VALUES (?,?,?,?,?,?,?)", 
-                                          (item, setor, veic, qtd, tipo, datetime.now().strftime("%Y-%m-%d"), detalhes_mov))
-                    conn.commit()
-                    st.success(f"✅ Operação registrada: {qtd} de {item}!")
+                with engine.connect() as conn:
+                    result = conn.execute(text("SELECT quantidade FROM estoque WHERE nome = :item"), {"item": item})
+                    estoque_atual = result.fetchone()[0]
+                    
+                    if tipo == "SAÍDA" and qtd > estoque_atual:
+                        st.error(f"❌ OPERAÇÃO NEGADA: Saldo insuficiente. Estoque atual: {estoque_atual}.")
+                    else:
+                        novo_estoque = estoque_atual + qtd if tipo == "ENTRADA" else estoque_atual - qtd
+                        conn.execute(text("UPDATE estoque SET quantidade = :qtd WHERE nome = :item"), 
+                                   {"qtd": novo_estoque, "item": item})
+                        conn.execute(text('''
+                            INSERT INTO movimentacoes (item, setor, veiculo, qtd, tipo, data, detalhes_aplicacao) 
+                            VALUES (:item, :setor, :veic, :qtd, :tipo, :data, :det)
+                        '''), {
+                            "item": item, "setor": setor, "veic": veic, "qtd": qtd, 
+                            "tipo": tipo, "data": datetime.now().strftime("%Y-%m-%d"), "det": detalhes_mov
+                        })
+                        conn.commit()
+                        st.success(f"✅ Operação registrada: {qtd} de {item}!")
 
-# --- EDITAR / CORRIGIR MOVIMENTAÇÃO ---
 elif menu == "Editar/Corrigir Movimentação":
     if st.session_state['nivel_usuario'] != 'Admin':
-        st.error("❌ ACESSO NEGADO: Apenas administradores podem acessar esta área!")
+        st.error("❌ ACESSO NEGADO!")
         st.stop()
     
     st.header("🛠️ Localizar, Editar ou Excluir Movimentação")
-    df_movs = pd.read_sql("SELECT id, data, tipo, item, qtd, setor, veiculo FROM movimentacoes ORDER BY id DESC LIMIT 50", conn)
+    df_movs = pd.read_sql("SELECT id, data, tipo, item, qtd, setor, veiculo FROM movimentacoes ORDER BY id DESC LIMIT 50", engine)
     
     if df_movs.empty:
         st.warning("Nenhuma movimentação recente.")
@@ -291,7 +312,7 @@ elif menu == "Editar/Corrigir Movimentação":
         lista_movs = [f"ID {row['id']} | {row['data']} | {row['tipo']} | {row['qtd']}x {row['item']}" for _, row in df_movs.iterrows()]
         mov_selecionada = st.selectbox("Selecione a Movimentação:", lista_movs)
         mov_id = int(mov_selecionada.split(" | ")[0].replace("ID ", ""))
-        dados_mov = pd.read_sql("SELECT * FROM movimentacoes WHERE id = ?", conn, params=(mov_id,)).iloc[0]
+        dados_mov = pd.read_sql("SELECT * FROM movimentacoes WHERE id = %s", engine, params=(mov_id,)).iloc[0]
 
         with st.form("edit_mov_form"):
             st.subheader(f"Editando Registro #{mov_id}")
@@ -301,12 +322,12 @@ elif menu == "Editar/Corrigir Movimentação":
                 nova_data = st.text_input("Data (YYYY-MM-DD)", value=dados_mov['data'])
                 nova_qtd = st.number_input("Quantidade", value=float(dados_mov['qtd']), min_value=0.01)
             with col2:
-                lista_itens = pd.read_sql("SELECT nome FROM estoque", conn)['nome'].tolist()
+                lista_itens = pd.read_sql("SELECT nome FROM estoque", engine)['nome'].tolist()
                 if dados_mov['item'] not in lista_itens: lista_itens.append(dados_mov['item']) 
                 novo_item = st.selectbox("Item", lista_itens, index=lista_itens.index(dados_mov['item']))
                 novo_setor = st.selectbox("Setor", lista_categorias_dinamica, index=lista_categorias_dinamica.index(dados_mov['setor']) if dados_mov['setor'] in lista_categorias_dinamica else 0)
 
-            lista_veic = pd.read_sql("SELECT nome FROM veiculos", conn)['nome'].tolist()
+            lista_veic = pd.read_sql("SELECT nome FROM veiculos", engine)['nome'].tolist()
             opcoes_extras = ["Estoque (Base)", "Aplicação em Campo", "Não informada"]
             for op in opcoes_extras:
                 if op not in lista_veic: lista_veic.insert(0, op)
@@ -318,44 +339,52 @@ elif menu == "Editar/Corrigir Movimentação":
             col_salvar, col_excluir = st.columns(2)
             with col_salvar:
                 if st.form_submit_button("💾 Salvar Correção"):
-                    cursor = conn.cursor()
-                    try:
-                        cursor.execute("SELECT quantidade FROM estoque WHERE nome = ?", (dados_mov['item'],))
-                        old_stock_row = cursor.fetchone()
-                        if old_stock_row:
-                            estoque_revertido = old_stock_row[0] - dados_mov['qtd'] if dados_mov['tipo'] == 'ENTRADA' else old_stock_row[0] + dados_mov['qtd']
-                            cursor.execute("UPDATE estoque SET quantidade = ? WHERE nome = ?", (estoque_revertido, dados_mov['item']))
+                    with engine.connect() as conn:
+                        try:
+                            result = conn.execute(text("SELECT quantidade FROM estoque WHERE nome = :item"), {"item": dados_mov['item']})
+                            old_stock = result.fetchone()
+                            if old_stock:
+                                estoque_revertido = old_stock[0] - dados_mov['qtd'] if dados_mov['tipo'] == 'ENTRADA' else old_stock[0] + dados_mov['qtd']
+                                conn.execute(text("UPDATE estoque SET quantidade = :qtd WHERE nome = :item"), 
+                                           {"qtd": estoque_revertido, "item": dados_mov['item']})
 
-                        cursor.execute("SELECT quantidade FROM estoque WHERE nome = ?", (novo_item,))
-                        new_stock_row = cursor.fetchone()
-                        if new_stock_row:
-                            current_new_stock = new_stock_row[0]
-                            if novo_tipo == 'SAÍDA' and nova_qtd > current_new_stock:
-                                st.error("❌ Saldo insuficiente para corrigir esta saída.")
-                                conn.rollback() 
-                            else:
-                                final_stock = current_new_stock + nova_qtd if novo_tipo == 'ENTRADA' else current_new_stock - nova_qtd
-                                cursor.execute("UPDATE estoque SET quantidade=? WHERE nome=?", (final_stock, novo_item))
-                                cursor.execute('''UPDATE movimentacoes SET item=?, setor=?, veiculo=?, qtd=?, tipo=?, data=?, detalhes_aplicacao=? WHERE id=?''',
-                                              (novo_item, novo_setor, novo_veic, nova_qtd, novo_tipo, nova_data, novo_detalhes, mov_id))
-                                conn.commit(); st.success("✅ Corrigido!"); st.rerun()
-                    except Exception as e: st.error(f"Erro: {e}")
+                            result = conn.execute(text("SELECT quantidade FROM estoque WHERE nome = :item"), {"item": novo_item})
+                            new_stock = result.fetchone()
+                            if new_stock:
+                                if novo_tipo == 'SAÍDA' and nova_qtd > new_stock[0]:
+                                    st.error("❌ Saldo insuficiente!")
+                                else:
+                                    final_stock = new_stock[0] + nova_qtd if novo_tipo == 'ENTRADA' else new_stock[0] - nova_qtd
+                                    conn.execute(text("UPDATE estoque SET quantidade = :qtd WHERE nome = :item"), 
+                                               {"qtd": final_stock, "item": novo_item})
+                                    conn.execute(text('''
+                                        UPDATE movimentacoes SET item=:item, setor=:setor, veiculo=:veic, 
+                                        qtd=:qtd, tipo=:tipo, data=:data, detalhes_aplicacao=:det WHERE id=:id
+                                    '''), {
+                                        "item": novo_item, "setor": novo_setor, "veic": novo_veic,
+                                        "qtd": nova_qtd, "tipo": novo_tipo, "data": nova_data,
+                                        "det": novo_detalhes, "id": mov_id
+                                    })
+                                    conn.commit()
+                                    st.success("✅ Corrigido!"); st.rerun()
+                        except Exception as e: st.error(f"Erro: {e}")
 
             with col_excluir:
                 if st.form_submit_button("🚨 Excluir Movimentação"):
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT quantidade FROM estoque WHERE nome = ?", (dados_mov['item'],))
-                    old_stock_row = cursor.fetchone()
-                    if old_stock_row:
-                        estoque_revertido = old_stock_row[0] - dados_mov['qtd'] if dados_mov['tipo'] == 'ENTRADA' else old_stock_row[0] + dados_mov['qtd']
-                        cursor.execute("UPDATE estoque SET quantidade = ? WHERE nome = ?", (estoque_revertido, dados_mov['item']))
-                    cursor.execute("DELETE FROM movimentacoes WHERE id = ?", (mov_id,))
-                    conn.commit(); st.success("🗑️ Excluído!"); st.rerun()
+                    with engine.connect() as conn:
+                        result = conn.execute(text("SELECT quantidade FROM estoque WHERE nome = :item"), {"item": dados_mov['item']})
+                        old_stock = result.fetchone()
+                        if old_stock:
+                            estoque_revertido = old_stock[0] - dados_mov['qtd'] if dados_mov['tipo'] == 'ENTRADA' else old_stock[0] + dados_mov['qtd']
+                            conn.execute(text("UPDATE estoque SET quantidade = :qtd WHERE nome = :item"), 
+                                       {"qtd": estoque_revertido, "item": dados_mov['item']})
+                        conn.execute(text("DELETE FROM movimentacoes WHERE id = :id"), {"id": mov_id})
+                        conn.commit()
+                        st.success("🗑️ Excluído!"); st.rerun()
 
-# --- CONFIGURAÇÕES ---
 elif menu == "Configurações":
     if st.session_state['nivel_usuario'] != 'Admin':
-        st.error("❌ ACESSO NEGADO: Apenas administradores podem acessar esta área!")
+        st.error("❌ ACESSO NEGADO!")
         st.stop()
     
     st.header("⚙️ Central de Administração e Cadastros")
@@ -376,13 +405,16 @@ elif menu == "Configurações":
             if st.form_submit_button("Registrar Item"):
                 if not nome.strip(): st.error("❌ ERRO: O nome do item é obrigatório!")
                 else:
-                    conn.cursor().execute("INSERT OR REPLACE INTO estoque VALUES (?,?,?,?)", (nome.strip(), cat, uni, qtd))
-                    conn.commit(); st.success(f"✅ Item '{nome}' registrado!")
+                    with engine.connect() as conn:
+                        conn.execute(text("INSERT INTO estoque VALUES (:nome, :cat, :uni, :qtd) ON CONFLICT (nome) DO UPDATE SET categoria=:cat, unidade=:uni, quantidade=:qtd"),
+                                   {"nome": nome.strip(), "cat": cat, "uni": uni, "qtd": qtd})
+                        conn.commit()
+                        st.success(f"✅ Item '{nome}' registrado!")
 
     elif sub_menu == "Editar/Corrigir Item Existente":
         st.subheader("🛠️ Localizar, Editar ou Excluir Item")
         setor_edit = st.selectbox("1. Selecione a Categoria do item:", lista_categorias_dinamica)
-        itens_df = pd.read_sql("SELECT * FROM estoque WHERE categoria = ?", conn, params=(setor_edit,))
+        itens_df = pd.read_sql("SELECT * FROM estoque WHERE categoria = %s", engine, params=(setor_edit,))
         if itens_df.empty: st.warning(f"Nenhum item em {setor_edit}.")
         else:
             lista_nomes = [n if n.strip() else "[ITEM SEM NOME]" for n in itens_df['nome'].tolist()]
@@ -394,8 +426,11 @@ elif menu == "Configurações":
                 nova_cat = st.selectbox("Atualizar Categoria", lista_categorias_dinamica, index=lista_categorias_dinamica.index(dados_atuais['categoria']) if dados_atuais['categoria'] in lista_categorias_dinamica else 0)
                 nova_qtd = st.number_input("Ajuste de Saldo", value=float(dados_atuais['quantidade']), min_value=0.0)
                 if st.form_submit_button("Salvar Alterações"):
-                    conn.cursor().execute("UPDATE estoque SET nome=?, categoria=?, quantidade=? WHERE nome=?", (novo_nome, nova_cat, nova_qtd, nome_real))
-                    conn.commit(); st.success("✅ Item atualizado!"); st.rerun()
+                    with engine.connect() as conn:
+                        conn.execute(text("UPDATE estoque SET nome=:novo, categoria=:cat, quantidade=:qtd WHERE nome=:antigo"),
+                                   {"novo": novo_nome, "cat": nova_cat, "qtd": nova_qtd, "antigo": nome_real})
+                        conn.commit()
+                        st.success("✅ Item atualizado!"); st.rerun()
 
     elif sub_menu == "Importação em Massa":
         st.subheader("📥 Importação em Massa")
@@ -405,9 +440,12 @@ elif menu == "Configurações":
         if arquivo_upload:
             df_import = pd.read_csv(arquivo_upload, sep=';')
             if st.button("Confirmar Importação"):
-                for _, row in df_import.iterrows():
-                    conn.cursor().execute("INSERT OR REPLACE INTO estoque VALUES (?,?,?,?)", (row['Nome'], row['Categoria'], row['Unidade'], row['Quantidade']))
-                conn.commit(); st.success("Importado!")
+                with engine.connect() as conn:
+                    for _, row in df_import.iterrows():
+                        conn.execute(text("INSERT INTO estoque VALUES (:nome, :cat, :uni, :qtd) ON CONFLICT (nome) DO UPDATE SET categoria=:cat, unidade=:uni, quantidade=:qtd"),
+                                   {"nome": row['Nome'], "cat": row['Categoria'], "uni": row['Unidade'], "qtd": row['Quantidade']})
+                    conn.commit()
+                    st.success("Importado!")
 
     elif sub_menu == "Gerenciar Máquinas":
         st.subheader("🚜 Gestão de Máquinas")
@@ -415,19 +453,22 @@ elif menu == "Configurações":
             nome = st.text_input("Nome da Máquina")
             detalhes = st.text_area("Detalhes")
             if st.form_submit_button("Salvar Veículo"):
-                conn.cursor().execute("INSERT INTO veiculos (nome, detalhes) VALUES (?, ?)", (nome.strip(), detalhes.strip()))
-                conn.commit(); st.success("✅ Máquina registrada!")
+                with engine.connect() as conn:
+                    conn.execute(text("INSERT INTO veiculos (nome, detalhes) VALUES (:nome, :det)"),
+                               {"nome": nome.strip(), "det": detalhes.strip()})
+                    conn.commit()
+                    st.success("✅ Máquina registrada!")
 
     elif sub_menu == "Relatório de Estoque (Exportar)":
         st.subheader("📑 Inventário Setorial")
         setor_rel = st.selectbox("Selecione o Setor", lista_categorias_dinamica)
-        df_estoque = pd.read_sql("SELECT * FROM estoque WHERE categoria = ?", conn, params=(setor_rel,))
+        df_estoque = pd.read_sql("SELECT * FROM estoque WHERE categoria = %s", engine, params=(setor_rel,))
         st.dataframe(df_estoque, use_container_width=True)
         if not df_estoque.empty: st.download_button("📥 Exportar Relatório", gerar_relatorio_marcado(df_estoque, f"Estoque - {setor_rel}"), "estoque.csv", "text/csv")
 
     elif sub_menu == "Relatório de Movimentação (Exportar)":
         st.subheader("📊 Auditoria de Movimentações")
-        df_mov = pd.read_sql("SELECT * FROM movimentacoes ORDER BY id DESC", conn)
+        df_mov = pd.read_sql("SELECT * FROM movimentacoes ORDER BY id DESC", engine)
         st.dataframe(df_mov, use_container_width=True)
         if not df_mov.empty: st.download_button("📥 Exportar Relatório", gerar_relatorio_marcado(df_mov, "Auditoria Geral"), "movimentacoes.csv", "text/csv")
 
@@ -435,8 +476,11 @@ elif menu == "Configurações":
         st.subheader("🏷️ Gestão de Categorias")
         nova_categoria = st.text_input("Nova Categoria")
         if st.button("➕ Adicionar"):
-            conn.cursor().execute("INSERT INTO categorias (nome) VALUES (?)", (nova_categoria.strip(),))
-            conn.commit(); st.rerun()
+            with engine.connect() as conn:
+                conn.execute(text("INSERT INTO categorias (nome) VALUES (:nome) ON CONFLICT DO NOTHING"), 
+                           {"nome": nova_categoria.strip()})
+                conn.commit()
+                st.rerun()
         for cat in lista_categorias_dinamica:
             st.write(f"• {cat}")
 
@@ -444,7 +488,7 @@ elif menu == "Configurações":
         st.subheader("👥 Controle de Acessos")
         
         st.markdown("### 📋 Usuários Cadastrados")
-        df_usuarios = pd.read_sql("SELECT usuario, nivel FROM usuarios ORDER BY nivel, usuario", conn)
+        df_usuarios = pd.read_sql("SELECT usuario, nivel FROM usuarios ORDER BY nivel, usuario", engine)
         if not df_usuarios.empty:
             st.dataframe(df_usuarios, use_container_width=True, hide_index=True)
         else:
@@ -457,9 +501,11 @@ elif menu == "Configurações":
         nivel = st.selectbox("Nível de Acesso", ["Usuário", "Admin"])
         if st.button("Salvar Operador"):
             if u.strip() and p.strip():
-                conn.cursor().execute("INSERT OR REPLACE INTO usuarios VALUES (?,?,?)", (u.strip(), p.strip(), nivel))
-                conn.commit()
-                st.success(f"✅ Usuário '{u}' salvo com sucesso!")
-                st.rerun()
+                with engine.connect() as conn:
+                    conn.execute(text("INSERT INTO usuarios VALUES (:u, :p, :n) ON CONFLICT (usuario) DO UPDATE SET senha=:p, nivel=:n"),
+                               {"u": u.strip(), "p": p.strip(), "n": nivel})
+                    conn.commit()
+                    st.success(f"✅ Usuário '{u}' salvo!")
+                    st.rerun()
             else:
                 st.error("❌ Preencha usuário e senha!")

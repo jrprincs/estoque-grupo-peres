@@ -33,7 +33,6 @@
         <p>Gestão de Estoque - Fazenda Boa Vista</p>
     </div>
 
-    <!-- TELA DE LOGIN -->
     <div id="loginScreen" class="container">
         <div class="card" style="max-width: 400px; margin: 50px auto;">
             <h2>🔐 Acesso ao Sistema</h2>
@@ -41,10 +40,10 @@
             <input type="password" id="senha" placeholder="Senha">
             <button onclick="login()">Entrar</button>
             <p id="erroLogin" style="color: red; margin-top: 10px;"></p>
+            <p id="msgTeste" style="color: blue; margin-top: 10px;"></p>
         </div>
     </div>
 
-    <!-- SISTEMA PRINCIPAL -->
     <div id="sistemaScreen" class="container hidden">
         <div class="sidebar">
             <span id="userInfo"></span>
@@ -57,7 +56,6 @@
             <button id="btnConfig" onclick="mostrarTela('configuracoes')">⚙️ Configurações</button>
         </div>
 
-        <!-- TELA INÍCIO -->
         <div id="telaInicio">
             <div class="card">
                 <h3>📊 Resumo do Sistema</h3>
@@ -71,36 +69,22 @@
             </div>
         </div>
 
-        <!-- TELA MOVIMENTAÇÃO -->
         <div id="telaMovimentacao" class="hidden">
             <div class="card">
                 <h3>🔄 Registrar Movimentação</h3>
-                <label>Categoria:</label>
                 <select id="setorMov"><option value="">Carregando...</option></select>
-                
-                <label>Tipo de Operação:</label>
                 <select id="tipoMov">
                     <option value="SAÍDA">SAÍDA</option>
                     <option value="ENTRADA">ENTRADA</option>
                 </select>
-                
-                <label>🔍 Pesquisar Item:</label>
-                <input type="text" id="pesquisaItem" placeholder="Digite para filtrar..." oninput="filtrarItens()">
-                
-                <label>Item:</label>
+                <input type="text" id="pesquisaItem" placeholder="🔍 Pesquisar item..." oninput="filtrarItens()">
                 <select id="itemMov"><option value="">Selecione...</option></select>
-                
-                <label>Quantidade:</label>
-                <input type="number" id="qtdMov" placeholder="0.00" step="0.01" min="0.01">
-                
-                <div id="detalhesMov"></div>
-                
+                <input type="number" id="qtdMov" placeholder="Quantidade" step="0.01" min="0.01">
                 <button onclick="registrarMovimentacao()">✅ Confirmar Operação</button>
                 <p id="msgMov"></p>
             </div>
         </div>
 
-        <!-- TELA CONFIGURAÇÕES -->
         <div id="telaConfiguracoes" class="hidden">
             <div class="card">
                 <h3>📦 Cadastrar Novo Item</h3>
@@ -112,14 +96,12 @@
                 <input type="number" id="qtdItem" placeholder="Estoque Inicial" min="0" value="0">
                 <button onclick="cadastrarItem()">📝 Registrar Item</button>
             </div>
-            
             <div class="card">
                 <h3>🚜 Cadastrar Máquina/Veículo</h3>
                 <input type="text" id="nomeVeic" placeholder="Nome da Máquina*">
-                <input type="text" id="detVeic" placeholder="Detalhes (modelo, ano, etc.)">
+                <input type="text" id="detVeic" placeholder="Detalhes">
                 <button onclick="cadastrarVeiculo()">💾 Salvar Veículo</button>
             </div>
-            
             <div class="card">
                 <h3>👥 Cadastrar Usuário</h3>
                 <input type="text" id="novoUsuario" placeholder="Nome de Usuário*">
@@ -135,14 +117,24 @@
 
     <script>
         const SUPABASE_URL = 'https://ojmqpgnscakdgvenhvyp.supabase.co';
-        const SUPABASE_KEY = 'sb_publishable_BJmEQhd0gwb0bQprNGECTA_CsCWS32b';
+        const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qbXFwZ25zY2FrZGd2ZW5odnlwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI2NjQwMDAsImV4cCI6MjA2ODI0MDAwMH0.RKqOsi4dxFFaytPDsHwCVRxYpGkYQvHTlAPVyBktojM';
         const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
         let usuarioLogado = null;
         let nivelUsuario = null;
         let todosItens = [];
 
-        // ============= LOGIN =============
+        // TESTAR CONEXÃO
+        async function testarConexao() {
+            const { data, error } = await supabase.from('usuarios').select('count', { count: 'exact', head: true });
+            if (error) {
+                document.getElementById('msgTeste').textContent = 'Erro de conexão: ' + error.message;
+            } else {
+                document.getElementById('msgTeste').textContent = '✅ Conectado ao banco!';
+            }
+        }
+        testarConexao();
+
         async function login() {
             const usuario = document.getElementById('usuario').value.trim();
             const senha = document.getElementById('senha').value.trim();
@@ -157,7 +149,12 @@
                 .select('*')
                 .eq('usuario', usuario)
                 .eq('senha', senha)
-                .single();
+                .maybeSingle();
+
+            if (error) {
+                document.getElementById('erroLogin').textContent = 'Erro: ' + error.message;
+                return;
+            }
 
             if (data) {
                 usuarioLogado = data.usuario;
@@ -168,10 +165,8 @@
                 
                 if (nivelUsuario !== 'Admin') {
                     document.getElementById('btnConfig').classList.add('hidden');
-                    document.getElementById('tipoMov').innerHTML = '<option value="SAÍDA">SAÍDA</option>';
                 }
                 
-                await carregarDados();
                 mostrarTela('inicio');
             } else {
                 document.getElementById('erroLogin').textContent = 'Usuário ou senha inválidos!';
@@ -188,7 +183,6 @@
             document.getElementById('erroLogin').textContent = '';
         }
 
-        // ============= NAVEGAÇÃO =============
         function mostrarTela(tela) {
             document.getElementById('telaInicio').classList.add('hidden');
             document.getElementById('telaMovimentacao').classList.add('hidden');
@@ -206,57 +200,51 @@
             }
         }
 
-        // ============= CARREGAR DADOS =============
-        async function carregarDados() {
-            await carregarResumo();
-        }
-
         async function carregarResumo() {
-            const { count: totalItens } = await supabase.from('estoque').select('*', { count: 'exact', head: true });
-            const { count: totalMovs } = await supabase.from('movimentacoes').select('*', { count: 'exact', head: true });
-            const { count: totalVeics } = await supabase.from('veiculos').select('*', { count: 'exact', head: true });
-            
-            document.getElementById('totalItens').textContent = totalItens || 0;
-            document.getElementById('totalMovs').textContent = totalMovs || 0;
-            document.getElementById('totalVeics').textContent = totalVeics || 0;
+            try {
+                const { count: totalItens } = await supabase.from('estoque').select('*', { count: 'exact', head: true });
+                const { count: totalMovs } = await supabase.from('movimentacoes').select('*', { count: 'exact', head: true });
+                const { count: totalVeics } = await supabase.from('veiculos').select('*', { count: 'exact', head: true });
+                
+                document.getElementById('totalItens').textContent = totalItens || 0;
+                document.getElementById('totalMovs').textContent = totalMovs || 0;
+                document.getElementById('totalVeics').textContent = totalVeics || 0;
 
-            const { data: movs } = await supabase
-                .from('movimentacoes')
-                .select('*')
-                .order('id', { ascending: false })
-                .limit(10);
+                const { data: movs } = await supabase
+                    .from('movimentacoes')
+                    .select('*')
+                    .order('id', { ascending: false })
+                    .limit(10);
 
-            let html = '<table><tr><th>Data</th><th>Tipo</th><th>Item</th><th>Qtd</th><th>Setor</th></tr>';
-            if (movs && movs.length > 0) {
-                movs.forEach(m => {
-                    html += `<tr><td>${m.data}</td><td>${m.tipo}</td><td>${m.item}</td><td>${m.qtd}</td><td>${m.setor}</td></tr>`;
-                });
-            } else {
-                html += '<tr><td colspan="5">Nenhuma movimentação</td></tr>';
+                let html = '<table><tr><th>Data</th><th>Tipo</th><th>Item</th><th>Qtd</th><th>Setor</th></tr>';
+                if (movs && movs.length > 0) {
+                    movs.forEach(m => {
+                        html += `<tr><td>${m.data}</td><td>${m.tipo}</td><td>${m.item}</td><td>${m.qtd}</td><td>${m.setor}</td></tr>`;
+                    });
+                } else {
+                    html += '<tr><td colspan="5">Nenhuma movimentação</td></tr>';
+                }
+                html += '</table>';
+                document.getElementById('tabelaMovs').innerHTML = html;
+            } catch(e) {
+                console.error(e);
             }
-            html += '</table>';
-            document.getElementById('tabelaMovs').innerHTML = html;
         }
 
         async function carregarCategoriasSelect() {
             const { data: categorias } = await supabase.from('categorias').select('*').order('nome');
-            const selects = ['catItem'];
-            selects.forEach(id => {
-                const sel = document.getElementById(id);
-                if (sel) {
-                    sel.innerHTML = '<option value="">Selecione...</option>';
-                    if (categorias) {
-                        categorias.forEach(c => {
-                            sel.innerHTML += `<option value="${c.nome}">${c.nome}</option>`;
-                        });
-                    }
+            const sel = document.getElementById('catItem');
+            if (sel) {
+                sel.innerHTML = '<option value="">Selecione...</option>';
+                if (categorias) {
+                    categorias.forEach(c => {
+                        sel.innerHTML += `<option value="${c.nome}">${c.nome}</option>`;
+                    });
                 }
-            });
+            }
         }
 
         async function carregarTelaMovimentacao() {
-            await carregarCategoriasSelect();
-            
             const { data: categorias } = await supabase.from('categorias').select('*').order('nome');
             const selSetor = document.getElementById('setorMov');
             selSetor.innerHTML = '<option value="">Selecione a Categoria</option>';
@@ -266,11 +254,13 @@
                 });
             }
 
-            document.getElementById('setorMov').onchange = async function() {
+            selSetor.onchange = async function() {
                 const setor = this.value;
-                const { data: itens } = await supabase.from('estoque').select('*').eq('categoria', setor);
-                todosItens = itens || [];
-                atualizarListaItens(todosItens);
+                if (setor) {
+                    const { data: itens } = await supabase.from('estoque').select('*').eq('categoria', setor);
+                    todosItens = itens || [];
+                    atualizarListaItens(todosItens);
+                }
             };
         }
 
@@ -288,7 +278,6 @@
             });
         }
 
-        // ============= MOVIMENTAÇÃO =============
         async function registrarMovimentacao() {
             const setor = document.getElementById('setorMov').value;
             const tipo = document.getElementById('tipoMov').value;
@@ -303,6 +292,11 @@
 
             const { data: estoque } = await supabase.from('estoque').select('quantidade').eq('nome', item).single();
             
+            if (!estoque) {
+                msg.innerHTML = '<div class="alert alert-error">Item não encontrado!</div>';
+                return;
+            }
+
             if (tipo === 'SAÍDA' && qtd > estoque.quantidade) {
                 msg.innerHTML = `<div class="alert alert-error">Saldo insuficiente! Estoque: ${estoque.quantidade}</div>`;
                 return;
@@ -312,67 +306,45 @@
             
             await supabase.from('estoque').update({ quantidade: novoEstoque }).eq('nome', item);
             await supabase.from('movimentacoes').insert({
-                item: item,
-                setor: setor,
-                veiculo: 'N/A',
-                qtd: qtd,
-                tipo: tipo,
+                item, setor, veiculo: 'N/A', qtd, tipo,
                 data: new Date().toISOString().split('T')[0],
                 detalhes_aplicacao: ''
             });
 
-            msg.innerHTML = '<div class="alert alert-success">✅ Operação registrada com sucesso!</div>';
+            msg.innerHTML = '<div class="alert alert-success">✅ Operação registrada!</div>';
             document.getElementById('qtdMov').value = '';
-            carregarTelaMovimentacao();
         }
 
-        // ============= CADASTROS =============
         async function cadastrarItem() {
             const nome = document.getElementById('nomeItem').value.trim();
             const cat = document.getElementById('catItem').value;
             const uni = document.getElementById('uniItem').value;
             const qtd = parseFloat(document.getElementById('qtdItem').value) || 0;
 
-            if (!nome || !cat) {
-                alert('Preencha nome e categoria!');
-                return;
-            }
+            if (!nome || !cat) { alert('Preencha nome e categoria!'); return; }
 
             await supabase.from('estoque').upsert({ nome, categoria: cat, unidade: uni, quantidade: qtd });
             alert('✅ Item cadastrado!');
             document.getElementById('nomeItem').value = '';
-            document.getElementById('qtdItem').value = '0';
         }
 
         async function cadastrarVeiculo() {
             const nome = document.getElementById('nomeVeic').value.trim();
             const detalhes = document.getElementById('detVeic').value.trim();
-
-            if (!nome) {
-                alert('Preencha o nome da máquina!');
-                return;
-            }
-
+            if (!nome) { alert('Preencha o nome!'); return; }
             await supabase.from('veiculos').insert({ nome, detalhes });
             alert('✅ Máquina cadastrada!');
             document.getElementById('nomeVeic').value = '';
-            document.getElementById('detVeic').value = '';
         }
 
         async function cadastrarUsuario() {
             const usuario = document.getElementById('novoUsuario').value.trim();
             const senha = document.getElementById('novaSenha').value.trim();
             const nivel = document.getElementById('nivelUsuario').value;
-
-            if (!usuario || !senha) {
-                alert('Preencha usuário e senha!');
-                return;
-            }
-
+            if (!usuario || !senha) { alert('Preencha todos!'); return; }
             await supabase.from('usuarios').upsert({ usuario, senha, nivel });
             alert('✅ Usuário cadastrado!');
             document.getElementById('novoUsuario').value = '';
-            document.getElementById('novaSenha').value = '';
         }
     </script>
 </body>
